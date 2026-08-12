@@ -3,170 +3,245 @@
 Pay your bills easily and never forget them again.
 
 PayFlow is a bill-payment and bill-management platform being built for
-Nigerian users. **This phase only initializes the project architecture and
-development foundation** — no payment provider, AI assistant, or real data
-layer is wired up yet. Everything below reflects what exists today.
+Nigerian users. **Phase 0** set up the project architecture. **Phase 1**
+(this one) makes it a real, data-driven app: Firebase Authentication +
+Firestore, real bill management, a real dashboard, and a development-only
+"Mark as Paid" flow. No payment provider or AI is connected yet — that's
+intentional, see [Safety rule](#safety-rule).
 
 ## Tech stack
 
 | Layer | Choice |
 |---|---|
 | Frontend | Next.js 14 (App Router), TypeScript (strict), Tailwind CSS |
-| Auth | Firebase Authentication |
-| Database | Firebase Firestore |
-| File storage | Firebase Storage |
-| Server logic | Next.js Route Handlers (API routes) / Netlify Functions where needed |
+| Auth | Firebase Authentication (email/password) |
+| Database | Firebase Firestore (client SDK + security rules) |
+| File storage | Firebase Storage (not used yet) |
+| Server logic | Next.js Route Handlers / Netlify Functions where needed |
 | Deployment | Netlify (`@netlify/plugin-nextjs`) |
 | Version control | GitHub |
-| Payments | **Not yet integrated** — see [Payment provider abstraction](#payment-provider-abstraction) |
-| AI assistant | **Not yet integrated** — server-side only, once added |
+| Payments | **Not yet integrated** — see `services/payments/` |
+| AI assistant | **Not yet integrated** |
 
 ## Getting started
 
 ```bash
 npm install
-cp .env.example .env.local   # then fill in your Firebase project's values
+cp .env.example .env.local   # fill in your Firebase project's web config
 npm run dev
 ```
 
-The app runs at `http://localhost:3000`. A health-check endpoint is available
-at `http://localhost:3000/api/health`.
+The app runs at `http://localhost:3000`. Health check: `http://localhost:3000/api/health`.
 
-Without a filled-in `.env.local`, the app still runs — pages render, but any
-screen that touches Firebase Auth (login/register) will show a clear
-"Firebase isn't configured" message instead of crashing.
+Without `.env.local` filled in, the app still runs — public pages render,
+and any screen touching Firebase shows a clear "Firebase isn't configured"
+message instead of crashing or infinitely redirecting.
 
 ### Other scripts
 
 ```bash
 npm run build       # production build
 npm run start        # run the production build
-npm run lint          # ESLint (next/core-web-vitals)
+npm run lint          # ESLint
 npm run typecheck  # tsc --noEmit, strict mode
 ```
+
+## Safety rule
+
+**No real payment provider is connected, and no real money moves in this
+app yet.** The "Mark as Paid" action on `/bills` is explicitly
+development-only: it opens a dialog labeled "Development mode" that says
+plainly it does not process a real payment, and every transaction it
+creates is stored with `source: "manual"` — never represented as
+provider-confirmed. See `services/bills/BillService.ts` →
+`markBillAsPaidDevelopment()` for the implementation and the comment
+marking it for removal/disabling before real payments are enabled.
+
+## What's new in Phase 1
+
+- **Auth is now fully wired**: register, login, logout, password reset,
+  a shared `AuthProvider` (one Firebase listener for the whole app instead
+  of one per component), and `/dashboard`, `/pay`, `/bills`,
+  `/transactions`, `/receipts`, `/analytics`, `/settings` are now genuinely
+  protected — signed-out visitors are redirected to `/login`.
+- **A Firestore `users/{uid}` profile** is created automatically on
+  registration (and self-healed on login if missing for older accounts).
+- **`/bills` is fully functional**: create, edit, delete, pause/resume,
+  view, search, filter by category/status, sort by due date or amount, and
+  the development "Mark as Paid" flow — all backed by real Firestore data,
+  scoped per user.
+- **`/dashboard` shows real numbers**: total upcoming, due this week,
+  active bill count, and paid-this-month, computed from your actual bills
+  and transactions — no more hard-coded demo data.
+- **Firestore security rules** (`firestore.rules`) enforce per-user
+  ownership server-side. The frontend never has to be trusted for this.
 
 ## Architecture
 
 ```
-app/                      Routes (App Router)
-  page.tsx                 Public landing page
-  login/, register/        Unauthenticated auth routes
-  (shell)/                 Route group: everything behind the app shell
-    layout.tsx              Wraps children in <AppShell />
-    dashboard/, pay/, bills/, transactions/,
+app/
+  page.tsx, login/, register/, forgot-password/    Public + auth routes
+  (shell)/                                          Protected route group
+    layout.tsx                                       ProtectedRoute + AppShell
+    dashboard/, bills/, pay/, transactions/,
     receipts/, analytics/, settings/, admin/
-  api/health/route.ts      Health-check endpoint
-  layout.tsx, globals.css  Root layout, fonts, Tailwind entry
+  api/health/route.ts
 
 components/
-  layout/                  AppShell, Sidebar, TopNav, MobileNav,
-                           UserProfileMenu, NotificationBell
-  ui/                      Reusable primitives: Button, Card, Badge,
-                           LoadingState, ErrorState, EmptyState, PageHeader, icons
+  auth/ProtectedRoute.tsx     Redirects signed-out users away from (shell) routes
+  providers/AuthProvider.tsx  Single shared Firebase auth subscription
+  bills/                      BillCard, BillFormModal, BillDetailModal, ConfirmActionDialog
+  layout/, ui/                Shell chrome and reusable primitives (Modal is new)
 
 lib/
-  firebase/client.ts        Firebase Web SDK — client components only
-  firebase/admin.ts          Firebase Admin SDK — SERVER ONLY (guarded by `server-only`)
-  utils/                    cn(), currency/date formatting
-  validation/                 Zod schemas shared by forms and (future) API routes
+  firebase/client.ts   Firebase Web SDK — client components only (unchanged from Phase 0)
+  firebase/admin.ts    Firebase Admin SDK — SERVER ONLY, not used yet this phase
+  utils/date.ts        calculateNextDueDate(), getDueUrgency() — recurring-bill date logic
+  utils/errors.ts      Maps raw Firebase errors to friendly, user-safe messages
+  validation/          Zod schemas, incl. billFormSchema, resetPasswordSchema
 
 services/
-  auth/AuthService.ts             Client-side wrapper around Firebase Auth
-  bills/BillService.ts             Server-side Firestore access for bills
-  payments/
-    PaymentProvider.interface.ts   The contract every real provider must implement
-    MockPaymentProvider.ts         Dev-only mock — never used in production
-    PaymentService.ts              Single entry point the app calls; resolves
-                                    which provider to use (none configured yet)
+  auth/AuthService.ts        login/register/logout/resetPassword
+  user/UserService.ts        Firestore users/{uid} profile CRUD
+  bills/BillService.ts       Firestore users/{uid}/bills CRUD + markBillAsPaidDevelopment()
+  transactions/TransactionService.ts   Firestore users/{uid}/transactions CRUD
+  payments/                  Unchanged — provider abstraction, still no real provider
 
-types/          Shared TypeScript types (user, bill, transaction, payment)
-hooks/          useAuth, useMediaQuery
-config/         site.ts, navigation.ts
+types/    user.ts, bill.ts (+ BILL_CATEGORIES/FREQUENCIES/STATUSES constants), transaction.ts
+
+firestore.rules            Per-user ownership rules — the real security boundary
+firestore.indexes.json     Currently empty — see "Why no composite indexes" below
+firebase.json               Ties the two together for `firebase deploy`
 ```
 
-### Client vs. server separation
+### Firestore data model
 
-- **Client-side**: anything under `"use client"` files — `lib/firebase/client.ts`,
-  `services/auth/AuthService.ts`, hooks, and interactive components. These only
-  ever see `NEXT_PUBLIC_*` env vars.
-- **Server-side**: `lib/firebase/admin.ts`, `services/bills/BillService.ts`,
-  `services/payments/*`, and `app/api/*` route handlers. These import the
-  `server-only` package so Next.js throws a build error if a client component
-  ever tries to import them by mistake.
-- **External APIs** (future payment provider, future AI API): will be called
-  exclusively from server-side services, never from the browser.
+```
+users/{userId}                        profile: email, displayName, phoneNumber,
+                                       photoURL, role, timezone, preferences, timestamps
 
-### Payment provider abstraction
+users/{userId}/bills/{billId}         name, category, provider, customerReference,
+                                       accountReference, amount, currency, frequency,
+                                       dueDate, reminderDaysBefore, status, notes,
+                                       lastPaidAt, nextDueDate, timestamps
 
-No Nigerian payment/bill-payment provider is integrated yet, by design. The
-app is structured so one can be added without rewriting anything:
+users/{userId}/transactions/{txId}    type, category, provider, amount, currency,
+                                       status, reference, source, metadata, createdAt
+```
 
-1. `services/payments/PaymentProvider.interface.ts` defines the contract
-   (`initiatePayment`, `verifyPayment`, `parseWebhookEvent`).
-2. `services/payments/MockPaymentProvider.ts` is a dev-only stand-in for UI
-   work — it never confirms a real payment as successful.
-3. `services/payments/PaymentService.ts` is the only thing the rest of the
-   app calls. It resolves a real provider from `PAYMENT_PROVIDER` — unset
-   today, so in production it fails loudly rather than faking success.
+Bills and transactions are **subcollections of the owning user**, not
+top-level collections with a `userId` field. Two benefits: every query is
+automatically scoped to the signed-in user (no `where("userId","==",uid)`
+needed), and Firestore security rules can check ownership just by matching
+the `{userId}` path segment against `request.auth.uid` — see
+`firestore.rules`.
 
-Adding a real provider later means: implement `PaymentProvider`, register it
-in `PaymentService`, add its secret keys as server-only env vars. No UI or
-route code needs to change.
+### Why no composite indexes
+
+All current queries are either scoped subcollection reads with no filter,
+or a single-field `orderBy("createdAt", "desc")` + `limit()` on
+transactions. Category/status/search filtering and sorting for `/bills`
+happens client-side in JavaScript after fetching the user's (small) bill
+list via a real-time `onSnapshot` listener. This avoids composite-index
+requirements entirely for this phase. `firestore.indexes.json` documents
+this decision and is ready to receive real index definitions if a future
+phase needs server-side filtered/sorted queries at larger scale.
+
+### Deploying Firestore security rules
+
+The rules in `firestore.rules` need to actually be published to your
+Firebase project — writing the file locally doesn't do that automatically.
+Two ways:
+
+**Firebase Console (no install needed):** open your project → Firestore
+Database → Rules tab → paste the contents of `firestore.rules` → Publish.
+
+**Firebase CLI:**
+```bash
+npm install -g firebase-tools
+firebase login
+firebase use --add        # select your Firebase project
+firebase deploy --only firestore:rules
+```
+
+### Client vs. server separation (unchanged principle, now more services follow it)
+
+- **Client-side**: `lib/firebase/client.ts`, `services/auth/`, `services/user/`,
+  `services/bills/`, `services/transactions/` — all marked `"use client"`,
+  all use the Firebase **client** SDK, and rely on `firestore.rules` for
+  security, not on being trusted.
+- **Server-side**: `lib/firebase/admin.ts` (guarded by the `server-only`
+  package), `services/payments/*`, `app/api/*`. Not used for bill/transaction
+  data this phase — see the note above on why the client SDK + security
+  rules was the right call here.
 
 ### Environment variables
 
-See [`.env.example`](./.env.example) for the full list and explanations.
-Summary:
+Unchanged from Phase 0 — see [`.env.example`](./.env.example). No new
+environment variables were needed for this phase; everything runs on the
+same `NEXT_PUBLIC_FIREBASE_*` client config.
 
-- `NEXT_PUBLIC_FIREBASE_*` — client-safe Firebase Web SDK config.
-- `FIREBASE_ADMIN_*` — server-only, Firebase Admin SDK credentials.
-- Payment provider and AI keys — server-only, commented out until a provider
-  is actually integrated.
-
-Never prefix a secret with `NEXT_PUBLIC_`.
-
-## Routes in this phase
-
-All routes below render placeholder UI (empty states, mock summary numbers
-clearly labeled "Mock") inside the shared application shell — sidebar on
-desktop, bottom nav on mobile, top nav with notification bell and profile
-menu.
+## Routes
 
 | Route | Status |
 |---|---|
 | `/` | Public landing page |
-| `/login`, `/register` | Functional forms wired to Firebase Auth (needs `.env.local`) |
-| `/dashboard` | Placeholder summary + empty state |
-| `/pay` | Placeholder bill-category grid |
-| `/bills` | Placeholder empty state |
-| `/transactions` | Placeholder empty state |
-| `/receipts` | Placeholder empty state |
-| `/analytics` | Placeholder empty state |
-| `/settings` | Placeholder section cards |
-| `/admin` | Placeholder, role-restricted note |
-| `/api/health` | Returns `{ status: "ok", ... }` |
+| `/login`, `/register`, `/forgot-password` | Fully functional, redirect signed-in users to `/dashboard` |
+| `/dashboard` | **Real data**: summary cards, upcoming bills, recent activity |
+| `/bills` | **Fully functional**: create/edit/delete/pause/view/search/filter/sort + dev Mark as Paid |
+| `/pay` | Still placeholder (Phase 2+, real payments) |
+| `/transactions`, `/receipts`, `/analytics` | Still placeholder (Phase 2+) |
+| `/settings`, `/admin` | Still placeholder |
+| `/api/health` | Unchanged |
 
-## Design system
+## Testing this phase manually
 
-Restrained fintech palette — deep emerald as the single brand accent (trust
-and growth, without a generic blue/purple gradient), warm near-black ink
-text, amber reserved for reminders/warnings, no decorative gradients or
-motion. Manrope for UI text, IBM Plex Mono for numeric/data-heavy contexts
-(amounts, references). Tokens live in `tailwind.config.ts`.
+1. Register a new user → confirm you land on `/dashboard` and a
+   `users/{uid}` document appears in Firestore.
+2. Log out, log back in → confirm session persists and no duplicate
+   profile document is created.
+3. Try `/forgot-password` → confirm a reset email arrives.
+4. On `/bills`, add a bill → confirm it appears immediately (real-time)
+   and shows correctly on `/dashboard`.
+5. Edit the bill, pause it, resume it, then delete it.
+6. Add another bill and use **Mark as paid** → confirm the "Development
+   mode" notice appears, a transaction shows up under Dashboard → Recent
+   activity labeled "Simulated", and the bill's due date advances correctly
+   (test a bill due Jan 31 with monthly frequency to check month-end
+   handling).
+7. Try visiting `/dashboard` directly while signed out → confirm redirect
+   to `/login`.
+8. Open a second browser/incognito window, log in as a different user →
+   confirm you cannot see the first user's bills (this is enforced by
+   `firestore.rules`, not just the UI).
+9. Test the above on a phone-width viewport.
 
 ## What's intentionally not built yet
 
-- Real payment processing of any kind (no provider is integrated — see above)
+- Real payment processing of any kind
 - The AI bill assistant
-- Firestore security rules and data seeding
-- Real Firestore reads/writes wired into the placeholder pages
+- Notifications and paymentRequests collections/UI (mentioned in the spec
+  as future structure; not built this phase to avoid unnecessary
+  complexity — reminders currently live as a `reminderDaysBefore` field on
+  each bill, with no delivery mechanism yet)
 - Role-based access control for `/admin`
 - Automated tests
 
-## Next step
+## Known limitation of this build session
 
-Set up a Firebase project (Auth + Firestore + Storage), fill in
-`.env.local`, and run `npm run dev` to confirm the shell, routes, and
-login/register flow work end-to-end against real Firebase. After that, the
-next phase should build out Firestore data models and real CRUD for bills
-(`BillService`) before touching payments or AI.
+I wasn't able to run `npm install` / `npm run build` / `tsc --noEmit` in
+the sandbox this was built in — no network access to the npm registry. I
+checked every import path and named export/import pairing by hand (script,
+not memory) and everything resolves. The first real, authoritative build
+check will happen the moment this is pushed and Netlify builds it — that
+log is the actual verification.
+
+## Next step (Phase 2)
+
+Real payment integration is explicitly out of scope until a provider is
+chosen. The natural next phase, staying within the "no real money" rule, is
+either: (a) a real notification/reminder delivery mechanism (email via a
+server-side function, using `reminderDaysBefore`), or (b) building out
+`/transactions` and `/receipts` as full pages against the
+`TransactionService` data that already exists. Payments and AI come after
+that, per the original roadmap.

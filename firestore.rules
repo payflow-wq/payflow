@@ -1,0 +1,50 @@
+rules_version = '2';
+
+// PayFlow Firestore security rules.
+//
+// Data model: everything lives under users/{userId} as a subcollection, so
+// ownership is enforced by matching the authenticated request's UID against
+// the {userId} path segment — never by trusting a `userId` field inside the
+// document, and never by relying on the client to filter correctly.
+// Frontend filtering is NOT security; these rules are the actual boundary.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      // A user may read/create/update only their own profile document.
+      // Deletion is disabled — account deletion should go through a
+      // controlled server-side flow later, not a direct client delete.
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId);
+      allow delete: if false;
+
+      match /bills/{billId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
+
+      match /transactions/{transactionId} {
+        // Transactions are an append-only audit trail from the client's
+        // point of view: create and read are allowed, but not update or
+        // delete, so a "successful" simulated/manual transaction can't be
+        // silently edited after the fact.
+        allow read, create: if isOwner(userId);
+        allow update, delete: if false;
+      }
+    }
+
+    // Everything else is denied by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
